@@ -235,6 +235,7 @@ const STAFF_KEY = 'plough_staff_list';
 const WORKING_STAFF_KEY = 'plough_working_staff';
 const CHECKS_KEY = 'plough_checks';
 const START_TIME_KEY = 'plough_start_time';
+const HOURS_KEY = 'plough_staff_hours';
 const MANAGER_CODE = '1234';
 const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbx_BhXV_ZYYGfsTikZMgpKqlrydi34V8H2xYABbc3e5tRDHWmhPtOOCHw9HJo7JoOpX/exec';
 
@@ -279,6 +280,7 @@ function init() {
     localStorage.setItem(START_TIME_KEY, now.toISOString());
     localStorage.setItem(WORKING_STAFF_KEY, JSON.stringify([]));
     localStorage.setItem(CHECKS_KEY, JSON.stringify([]));
+    localStorage.setItem(HOURS_KEY, JSON.stringify({}));
   }
   
   if (!localStorage.getItem(WORKING_STAFF_KEY)) {
@@ -288,6 +290,14 @@ function init() {
   if (!localStorage.getItem(CHECKS_KEY)) {
     localStorage.setItem(CHECKS_KEY, JSON.stringify([]));
   }
+  
+  if (!localStorage.getItem(HOURS_KEY)) {
+    localStorage.setItem(HOURS_KEY, JSON.stringify({}));
+  }
+}
+
+function getStaffHours() {
+  return JSON.parse(localStorage.getItem(HOURS_KEY) || '{}');
 }
 
 function getStaff() {
@@ -338,8 +348,20 @@ function showThankYou() {
 function addStaffToDay(fullName, avatar) {
   const working = getWorkingStaff();
   if (fullName && !working.find(s => s.name === fullName)) {
+    const now = new Date().toISOString();
     working.push({ name: fullName, avatar: avatar });
     localStorage.setItem(WORKING_STAFF_KEY, JSON.stringify(working));
+    
+    const hours = getStaffHours();
+    if (!hours[fullName]) {
+      hours[fullName] = { avatar: avatar, totalMinutes: 0, clockIn: now, clockOut: null };
+    } else {
+      hours[fullName].clockIn = now;
+      hours[fullName].clockOut = null;
+      hours[fullName].avatar = avatar;
+    }
+    localStorage.setItem(HOURS_KEY, JSON.stringify(hours));
+    
     showAlert(`✓ ${getDisplayName(fullName)} clocked in`);
     renderWorkingStaff();
     renderStaff();
@@ -353,6 +375,17 @@ function removeStaffFromDay(fullName) {
   if (index > -1) {
     working.splice(index, 1);
     localStorage.setItem(WORKING_STAFF_KEY, JSON.stringify(working));
+    
+    const hours = getStaffHours();
+    if (hours[fullName] && hours[fullName].clockIn) {
+      const now = new Date();
+      const clockIn = new Date(hours[fullName].clockIn);
+      const sessionMinutes = (now - clockIn) / 1000 / 60;
+      hours[fullName].totalMinutes += sessionMinutes;
+      hours[fullName].clockOut = now.toISOString();
+      localStorage.setItem(HOURS_KEY, JSON.stringify(hours));
+    }
+    
     if (selectedStaff === fullName) {
       selectedStaff = null;
     }
@@ -920,19 +953,50 @@ if (confirmActionCodeInput) {
 
 function executeReportSend() {
   const checks = getChecks();
-  const working = getWorkingStaff();
+  const hours = getStaffHours();
   const completed = checks.filter(c => c.completed).length;
   const pending = checks.filter(c => !c.completed).length;
-  
   const now = new Date();
+  
+  // Build a report for every staff who worked today (from hours record)
+  const staffNames = Object.keys(hours);
+  
+  const staffReport = staffNames.map(name => {
+    const record = hours[name];
+    
+    // Work time: total accumulated + current session if still clocked in
+    let workMinutes = record.totalMinutes || 0;
+    if (record.clockIn && !record.clockOut) {
+      workMinutes += (now - new Date(record.clockIn)) / 1000 / 60;
+    }
+    
+    // Checks completed by this staff
+    const staffChecks = checks.filter(c => c.staffCheck === name && c.completed);
+    const checksCompleted = staffChecks.length;
+    
+    // Average time to complete a check (completedTime - foodTime)
+    let avgCheckMinutes = 0;
+    if (checksCompleted > 0) {
+      const totalCheckTime = staffChecks.reduce((sum, c) => {
+        return sum + (new Date(c.completedTime) - new Date(c.foodTime)) / 1000 / 60;
+      }, 0);
+      avgCheckMinutes = totalCheckTime / checksCompleted;
+    }
+    
+    return {
+      name: name,
+      avatar: record.avatar || '👤',
+      checksCompleted: checksCompleted,
+      workTimeHours: Math.floor(workMinutes / 60),
+      workTimeMinutes: Math.round(workMinutes % 60),
+      avgCheckTime: Math.round(avgCheckMinutes * 10) / 10
+    };
+  });
+  
   const reportData = {
     date: now.toLocaleDateString('fr-FR'),
     time: now.toLocaleTimeString('fr-FR'),
-    staffReport: working.map(staff => ({
-      name: staff.name,
-      avatar: staff.avatar,
-      checksCompleted: checks.filter(c => c.staffCheck === staff.name && c.completed).length
-    })),
+    staffReport: staffReport,
     totalCompleted: completed,
     totalPending: pending
   };
