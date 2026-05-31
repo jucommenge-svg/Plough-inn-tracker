@@ -939,18 +939,17 @@ function executeReportSend() {
   
   fetch(WEBHOOK_URL, {
     method: 'POST',
-    payload: JSON.stringify(reportData)
+    mode: 'no-cors',
+    headers: {
+      'Content-Type': 'text/plain;charset=utf-8'
+    },
+    body: JSON.stringify(reportData)
   })
-  .then(response => response.json())
-  .then(data => {
-    if (data.success) {
-      showAlert('✓ Report sent to all managers!');
-    } else {
-      showAlert('⚠ Error sending report');
-    }
+  .then(() => {
+    showAlert('✓ Report sent to all managers!');
   })
-  .catch(error => {
-    showAlert('✓ Report sent!');
+  .catch(() => {
+    showAlert('⚠ Could not send - check internet connection');
   });
 }
 
