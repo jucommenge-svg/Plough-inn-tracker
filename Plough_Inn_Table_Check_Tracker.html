@@ -114,7 +114,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
     <h1>Table Check Tracker</h1>
     <div style="text-align: right;">
       <div id="datetime" style="font-size: 12px; color: #666;"></div>
-      <div style="font-size: 10px; color: #27AE60; font-weight: 600;">v4</div>
+      <div style="font-size: 10px; color: #27AE60; font-weight: 600;">v5b - synced</div>
     </div>
   </div>
 
@@ -232,7 +232,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
   </div>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <script>
+const firebaseConfig = {
+  apiKey: "AIzaSyDdTvyLegSjCIEAw-v4XeHGsyDBaH3uiL0",
+  authDomain: "plough-inn-tracker.firebaseapp.com",
+  databaseURL: "https://plough-inn-tracker-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "plough-inn-tracker",
+  storageBucket: "plough-inn-tracker.firebasestorage.app",
+  messagingSenderId: "1071921980140",
+  appId: "1:1071921980140:web:2e8a24af319bf7cfc2bbc9"
+};
+let db = null;
+
+const dbCache = { staffList: [], workingStaff: [], checksObj: {}, hours: {} };
+
 const STAFF_KEY = 'plough_staff_list';
 const WORKING_STAFF_KEY = 'plough_working_staff';
 const CHECKS_KEY = 'plough_checks';
@@ -271,47 +286,63 @@ let pendingAvatar = null;
 let selectedAvatarForPending = null;
 
 function init() {
-  if (!localStorage.getItem(STAFF_KEY)) {
-    localStorage.setItem(STAFF_KEY, JSON.stringify(defaultStaff));
-  }
-  
-  const now = new Date();
-  const startTime = localStorage.getItem(START_TIME_KEY);
-  
-  if (!startTime || new Date(startTime).getDate() !== now.getDate()) {
-    localStorage.setItem(START_TIME_KEY, now.toISOString());
-    localStorage.setItem(WORKING_STAFF_KEY, JSON.stringify([]));
-    localStorage.setItem(CHECKS_KEY, JSON.stringify([]));
-    localStorage.setItem(HOURS_KEY, JSON.stringify({}));
-  }
-  
-  if (!localStorage.getItem(WORKING_STAFF_KEY)) {
-    localStorage.setItem(WORKING_STAFF_KEY, JSON.stringify([]));
-  }
-  
-  if (!localStorage.getItem(CHECKS_KEY)) {
-    localStorage.setItem(CHECKS_KEY, JSON.stringify([]));
-  }
-  
-  if (!localStorage.getItem(HOURS_KEY)) {
-    localStorage.setItem(HOURS_KEY, JSON.stringify({}));
-  }
+  db.ref('staffList').once('value', snap => {
+    if (!snap.val()) {
+      db.ref('staffList').set(defaultStaff);
+    }
+  });
+
+  const today = new Date().toDateString();
+  db.ref('serviceDate').once('value', snap => {
+    if (snap.val() !== today) {
+      db.ref('serviceDate').set(today);
+      db.ref('checks').set(null);
+      db.ref('workingStaff').set(null);
+      db.ref('hours').set(null);
+    }
+  });
+}
+
+function renderAll() {
+  renderWorkingStaff();
+  renderStaff();
+  renderTables();
+  updateStats();
+  updateLeaderboard();
+}
+
+function startFirebaseListeners() {
+  db.ref('staffList').on('value', snap => {
+    dbCache.staffList = snap.val() || [];
+  });
+  db.ref('workingStaff').on('value', snap => {
+    dbCache.workingStaff = snap.val() || [];
+    renderAll();
+  });
+  db.ref('checks').on('value', snap => {
+    dbCache.checksObj = snap.val() || {};
+    renderAll();
+  });
+  db.ref('hours').on('value', snap => {
+    dbCache.hours = snap.val() || {};
+  });
 }
 
 function getStaffHours() {
-  return JSON.parse(localStorage.getItem(HOURS_KEY) || '{}');
+  return dbCache.hours || {};
 }
 
 function getStaff() {
-  return JSON.parse(localStorage.getItem(STAFF_KEY) || '[]');
+  return dbCache.staffList || [];
 }
 
 function getWorkingStaff() {
-  return JSON.parse(localStorage.getItem(WORKING_STAFF_KEY) || '[]');
+  return dbCache.workingStaff || [];
 }
 
 function getChecks() {
-  return JSON.parse(localStorage.getItem(CHECKS_KEY) || '[]');
+  const obj = dbCache.checksObj || {};
+  return Object.keys(obj).map(k => Object.assign({ _key: k }, obj[k]));
 }
 
 function getDisplayName(fullName) {
@@ -352,7 +383,7 @@ function addStaffToDay(fullName, avatar) {
   if (fullName && !working.find(s => s.name === fullName)) {
     const now = new Date().toISOString();
     working.push({ name: fullName, avatar: avatar });
-    localStorage.setItem(WORKING_STAFF_KEY, JSON.stringify(working));
+    db.ref('workingStaff').set(working);
     
     const hours = getStaffHours();
     if (!hours[fullName]) {
@@ -362,12 +393,9 @@ function addStaffToDay(fullName, avatar) {
       hours[fullName].clockOut = null;
       hours[fullName].avatar = avatar;
     }
-    localStorage.setItem(HOURS_KEY, JSON.stringify(hours));
+    db.ref('hours').set(hours);
     
     showAlert(`✓ ${getDisplayName(fullName)} clocked in`);
-    renderWorkingStaff();
-    renderStaff();
-    updateLeaderboard();
   }
 }
 
@@ -376,16 +404,16 @@ function removeStaffFromDay(fullName) {
   const index = working.findIndex(s => s.name === fullName);
   if (index > -1) {
     working.splice(index, 1);
-    localStorage.setItem(WORKING_STAFF_KEY, JSON.stringify(working));
+    db.ref('workingStaff').set(working);
     
     const hours = getStaffHours();
     if (hours[fullName] && hours[fullName].clockIn) {
       const now = new Date();
       const clockIn = new Date(hours[fullName].clockIn);
       const sessionMinutes = (now - clockIn) / 1000 / 60;
-      hours[fullName].totalMinutes += sessionMinutes;
+      hours[fullName].totalMinutes = (hours[fullName].totalMinutes || 0) + sessionMinutes;
       hours[fullName].clockOut = now.toISOString();
-      localStorage.setItem(HOURS_KEY, JSON.stringify(hours));
+      db.ref('hours').set(hours);
     }
     
     if (selectedStaff === fullName) {
@@ -574,7 +602,7 @@ function unlockManageStaff() {
         const index = allStaff.indexOf(name);
         if (index > -1) {
           allStaff.splice(index, 1);
-          localStorage.setItem(STAFF_KEY, JSON.stringify(allStaff));
+          db.ref('staffList').set(allStaff);
           showAlert(`✓ ${name} deleted from system`);
           unlockManageStaff();
         }
@@ -718,11 +746,7 @@ function renderTables() {
 }
 
 function startNewCheck(tableNum) {
-  const newChecks = getChecks();
-  newChecks.push({ table: tableNum, foodTime: new Date().toISOString(), completed: false });
-  localStorage.setItem(CHECKS_KEY, JSON.stringify(newChecks));
-  renderTables();
-  updateStats();
+  db.ref('checks').push({ table: tableNum, foodTime: new Date().toISOString(), completed: false });
 }
 
 function completeCheck(tableNum) {
@@ -732,21 +756,18 @@ function completeCheck(tableNum) {
   }
   
   const checks = getChecks();
-  const tableChecks = checks.filter(c => c.table === tableNum);
+  const tableChecks = checks.filter(c => c.table === tableNum && !c.completed);
   if (tableChecks.length > 0) {
-    const lastCheck = tableChecks[tableChecks.length - 1];
-    lastCheck.completed = true;
-    lastCheck.completedTime = new Date().toISOString();
-    lastCheck.staffCheck = selectedStaff;
+    const target = tableChecks[tableChecks.length - 1];
+    db.ref('checks/' + target._key).update({
+      completed: true,
+      completedTime: new Date().toISOString(),
+      staffCheck: selectedStaff
+    });
   }
-  
-  localStorage.setItem(CHECKS_KEY, JSON.stringify(checks));
   
   selectedStaff = null;
   renderStaff();
-  renderTables();
-  updateStats();
-  updateLeaderboard();
 }
 
 function updateStats() {
@@ -853,7 +874,7 @@ function addStaffMember() {
     const allStaff = getStaff();
     if (!allStaff.includes(name)) {
       allStaff.push(name);
-      localStorage.setItem(STAFF_KEY, JSON.stringify(allStaff));
+      db.ref('staffList').set(allStaff);
       pendingAvatar = name;
       document.getElementById('manager-staff-modal').classList.remove('show');
       showAvatarModal();
@@ -1020,27 +1041,47 @@ function executeReportSend() {
 }
 
 function executeServiceReset() {
-  localStorage.setItem(CHECKS_KEY, JSON.stringify([]));
+  db.ref('checks').set(null);
   selectedStaff = null;
-  renderStaff();
-  renderTables();
-  updateStats();
-  updateLeaderboard();
   showAlert('✓ Service reset - Ready for next session');
 }
 
-init();
-renderWorkingStaff();
-renderStaff();
-renderTabs();
-renderTables();
-updateStats();
-updateLeaderboard();
-updateDateTime();
+function renderUI() {
+  renderTabs();
+  renderTables();
+  updateStats();
+  updateLeaderboard();
+  updateDateTime();
+}
 
-setInterval(updateDateTime, 1000);
-setInterval(renderTables, 500);
-setInterval(updateLeaderboard, 500);
+function connectFirebase() {
+  if (typeof firebase === 'undefined' || !firebase.database) {
+    setTimeout(connectFirebase, 600);
+    return;
+  }
+  try {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.database();
+    init();
+    startFirebaseListeners();
+  } catch (e) {
+    setTimeout(connectFirebase, 1000);
+  }
+}
+
+function bootApp() {
+  renderUI();
+  setInterval(updateDateTime, 1000);
+  setInterval(renderTables, 500);
+  setInterval(updateLeaderboard, 500);
+  connectFirebase();
+}
+
+if (document.readyState === 'complete') {
+  bootApp();
+} else {
+  window.addEventListener('load', bootApp);
+}
 </script>
 </body>
 </html>
