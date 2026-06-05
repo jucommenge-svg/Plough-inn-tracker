@@ -62,6 +62,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
   color: #333 !important;
 }
 
+.table-btn.ready { 
+  background: #27AE60 !important; 
+  border-color: #27AE60 !important; 
+  color: #fff !important;
+}
+
 .table-btn.late { 
   background: #E74C3C !important; 
   color: #fff !important; 
@@ -114,7 +120,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
     <h1>Table Check Tracker</h1>
     <div style="text-align: right;">
       <div id="datetime" style="font-size: 12px; color: #666;"></div>
-      <div style="font-size: 10px; color: #27AE60; font-weight: 600;">v5b - synced</div>
+      <div style="font-size: 10px; color: #27AE60; font-weight: 600;">v6</div>
     </div>
   </div>
 
@@ -125,7 +131,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
     </div>
     <div class="stat-card red">
       <div class="stat-value" id="late">0</div>
-      <div class="stat-label">Late (>5min)</div>
+      <div class="stat-label">Late (>8min)</div>
     </div>
     <div class="stat-card">
       <div class="stat-value" id="pending">0</div>
@@ -269,7 +275,7 @@ const defaultStaff = [
 const avatars = ['🎩', '🐕', '🚗', '💎', '⚙️', '👞', '🎪', '💼', '🦁', '🐘', '🎯', '🎲', '👑', '🏅', '⭐'];
 
 const tableNumbers = [
-  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,20,21,22,23,24,25,27,30,31,32,33,34,35,36,37,38,40,41,42,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,60,61,62,63,70,71,72,73,74,75,76,77,78,
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,20,21,22,23,24,25,27,30,31,32,33,34,35,36,37,38,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,60,61,62,63,70,71,72,73,74,75,76,77,78,
   100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,
   200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223
 ];
@@ -720,8 +726,10 @@ function renderTables() {
     
     if (lastCheck && !lastCheck.completed) {
       const delta = (Date.now() - new Date(lastCheck.foodTime)) / 1000 / 60;
-      if (delta > 5) {
+      if (delta >= 8) {
         btn.classList.add('late');
+      } else if (delta >= 3) {
+        btn.classList.add('ready');
       } else {
         btn.classList.add('pending');
       }
@@ -777,7 +785,7 @@ function updateStats() {
   checks.forEach(check => {
     if (check.completed) {
       const delta = (new Date(check.completedTime) - new Date(check.foodTime)) / 1000 / 60;
-      if (delta <= 5) onTime++;
+      if (delta <= 8) onTime++;
       else late++;
     } else {
       pending++;
@@ -798,7 +806,7 @@ function updatePendingList() {
   checks.forEach(check => {
     if (!check.completed) {
       const delta = (Date.now() - new Date(check.foodTime)) / 1000 / 60;
-      pending.push({ table: check.table, delta, late: delta > 5 });
+      pending.push({ table: check.table, delta, late: delta >= 8 });
     }
   });
   
@@ -808,9 +816,13 @@ function updatePendingList() {
     return;
   }
   
-  pendingList.innerHTML = pending.map(p => 
-    `<div class="pending-item ${p.late ? 'late' : ''}">Table ${p.table} - ${Math.round(p.delta)} min ${p.late ? '(LATE)' : ''}</div>`
-  ).join('');
+  pendingList.innerHTML = pending.sort((a,b) => b.delta - a.delta).map(p => {
+    const mins = Math.floor(p.delta);
+    const secs = Math.floor((p.delta - mins) * 60);
+    const time = mins + 'm ' + secs + 's';
+    const status = p.delta < 3 ? '(too early)' : p.late ? '(LATE)' : '(check now!)';
+    return `<div class="pending-item ${p.late ? 'late' : ''}"">Table ${p.table} - ${time} ${status}</div>`;
+  }).join('');
 }
 
 function updateDateTime() {
@@ -1074,6 +1086,7 @@ function bootApp() {
   setInterval(updateDateTime, 1000);
   setInterval(renderTables, 500);
   setInterval(updateLeaderboard, 500);
+  setInterval(updatePendingList, 1000);
   connectFirebase();
 }
 
