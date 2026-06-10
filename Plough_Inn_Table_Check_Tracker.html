@@ -120,7 +120,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
     <h1>Table Check Tracker</h1>
     <div style="text-align: right;">
       <div id="datetime" style="font-size: 12px; color: #666;"></div>
-      <div style="font-size: 10px; color: #27AE60; font-weight: 600;">v6</div>
+      <div style="font-size: 10px; color: #27AE60; font-weight: 600;">v9</div>
     </div>
   </div>
 
@@ -164,7 +164,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
   <div class="pending-list" id="pending-list"><div style="color: #999; font-size: 12px;">No pending checks</div></div>
 
   <div class="action-buttons">
-    <button class="btn" id="send-report-btn">Send Report</button>
+    <button class="btn" id="send-report-btn">Send Daily Report</button>
+    <button class="btn" id="send-weekly-btn" style="border-color: #8E44AD; color: #8E44AD;">Send Weekly Report 🏆</button>
     <button class="btn btn-danger" id="reset-btn">Reset Service</button>
   </div>
 </div>
@@ -291,6 +292,11 @@ let currentSection = '1-80';
 let pendingAvatar = null;
 let selectedAvatarForPending = null;
 
+function getTodayKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
 function init() {
   db.ref('staffList').once('value', snap => {
     if (!snap.val()) {
@@ -298,13 +304,20 @@ function init() {
     }
   });
 
-  const today = new Date().toDateString();
-  db.ref('serviceDate').once('value', snap => {
-    if (snap.val() !== today) {
-      db.ref('serviceDate').set(today);
-      db.ref('checks').set(null);
-      db.ref('workingStaff').set(null);
-      db.ref('hours').set(null);
+  const todayKey = getTodayKey();
+  db.ref('today/date').once('value', snap => {
+    if (snap.val() !== todayKey) {
+      // Archive previous day before resetting
+      db.ref('today').once('value', prevSnap => {
+        const prevData = prevSnap.val();
+        if (prevData && prevData.date) {
+          db.ref('archive/' + prevData.date).set({
+            checks: prevData.checks || null,
+            hours: prevData.hours || null
+          });
+        }
+        db.ref('today').set({ date: todayKey, checks: null, workingStaff: null, hours: null });
+      });
     }
   });
 }
@@ -321,15 +334,15 @@ function startFirebaseListeners() {
   db.ref('staffList').on('value', snap => {
     dbCache.staffList = snap.val() || [];
   });
-  db.ref('workingStaff').on('value', snap => {
+  db.ref('today/workingStaff').on('value', snap => {
     dbCache.workingStaff = snap.val() || [];
     renderAll();
   });
-  db.ref('checks').on('value', snap => {
+  db.ref('today/checks').on('value', snap => {
     dbCache.checksObj = snap.val() || {};
     renderAll();
   });
-  db.ref('hours').on('value', snap => {
+  db.ref('today/hours').on('value', snap => {
     dbCache.hours = snap.val() || {};
   });
 }
@@ -389,7 +402,7 @@ function addStaffToDay(fullName, avatar) {
   if (fullName && !working.find(s => s.name === fullName)) {
     const now = new Date().toISOString();
     working.push({ name: fullName, avatar: avatar });
-    db.ref('workingStaff').set(working);
+    db.ref('today/workingStaff').set(working);
     
     const hours = getStaffHours();
     if (!hours[fullName]) {
@@ -399,7 +412,7 @@ function addStaffToDay(fullName, avatar) {
       hours[fullName].clockOut = null;
       hours[fullName].avatar = avatar;
     }
-    db.ref('hours').set(hours);
+    db.ref('today/hours').set(hours);
     
     showAlert(`✓ ${getDisplayName(fullName)} clocked in`);
   }
@@ -410,7 +423,7 @@ function removeStaffFromDay(fullName) {
   const index = working.findIndex(s => s.name === fullName);
   if (index > -1) {
     working.splice(index, 1);
-    db.ref('workingStaff').set(working);
+    db.ref('today/workingStaff').set(working);
     
     const hours = getStaffHours();
     if (hours[fullName] && hours[fullName].clockIn) {
@@ -419,7 +432,7 @@ function removeStaffFromDay(fullName) {
       const sessionMinutes = (now - clockIn) / 1000 / 60;
       hours[fullName].totalMinutes = (hours[fullName].totalMinutes || 0) + sessionMinutes;
       hours[fullName].clockOut = now.toISOString();
-      db.ref('hours').set(hours);
+      db.ref('today/hours').set(hours);
     }
     
     if (selectedStaff === fullName) {
@@ -754,7 +767,7 @@ function renderTables() {
 }
 
 function startNewCheck(tableNum) {
-  db.ref('checks').push({ table: tableNum, foodTime: new Date().toISOString(), completed: false });
+  db.ref('today/checks').push({ table: tableNum, foodTime: new Date().toISOString(), completed: false });
 }
 
 function completeCheck(tableNum) {
@@ -767,7 +780,7 @@ function completeCheck(tableNum) {
   const tableChecks = checks.filter(c => c.table === tableNum && !c.completed);
   if (tableChecks.length > 0) {
     const target = tableChecks[tableChecks.length - 1];
-    db.ref('checks/' + target._key).update({
+    db.ref('today/checks/' + target._key).update({
       completed: true,
       completedTime: new Date().toISOString(),
       staffCheck: selectedStaff
@@ -940,16 +953,28 @@ document.getElementById('clock-off-cancel').onclick = () => {
 };
 
 document.getElementById('send-report-btn').onclick = () => {
-  document.getElementById('confirm-action-title').textContent = 'Send Report';
-  document.getElementById('confirm-action-btn').textContent = 'Send Report';
+  document.getElementById('confirm-action-title').textContent = 'Send Daily Report';
+  document.getElementById('confirm-action-btn').textContent = 'Send Daily Report';
   document.getElementById('confirm-action-code').value = '';
   document.getElementById('confirm-action-code').dataset.action = 'send';
+  document.getElementById('confirm-action-modal').classList.add('show');
+};
+
+document.getElementById('send-weekly-btn').onclick = () => {
+  document.getElementById('confirm-action-title').textContent = 'Send Weekly Report 🏆';
+  document.getElementById('confirm-action-btn').textContent = 'Send Weekly Report';
+  document.getElementById('confirm-action-btn').style.borderColor = '#8E44AD';
+  document.getElementById('confirm-action-btn').style.background = '#8E44AD';
+  document.getElementById('confirm-action-code').value = '';
+  document.getElementById('confirm-action-code').dataset.action = 'weekly';
   document.getElementById('confirm-action-modal').classList.add('show');
 };
 
 document.getElementById('reset-btn').onclick = () => {
   document.getElementById('confirm-action-title').textContent = 'Reset Service';
   document.getElementById('confirm-action-btn').textContent = 'Reset Service';
+  document.getElementById('confirm-action-btn').style.borderColor = '#2E75B6';
+  document.getElementById('confirm-action-btn').style.background = '#2E75B6';
   document.getElementById('confirm-action-code').value = '';
   document.getElementById('confirm-action-code').dataset.action = 'reset';
   document.getElementById('confirm-action-modal').classList.add('show');
@@ -968,6 +993,8 @@ document.getElementById('confirm-action-btn').onclick = () => {
   
   if (action === 'send') {
     executeReportSend();
+  } else if (action === 'weekly') {
+    executeWeeklyReport();
   } else if (action === 'reset') {
     executeServiceReset();
   }
@@ -1045,6 +1072,7 @@ function executeReportSend() {
     body: JSON.stringify(reportData)
   })
   .then(() => {
+    if (db) db.ref('today/dailyReportSent').set(true);
     showAlert('✓ Report sent to all managers!');
   })
   .catch(() => {
@@ -1053,9 +1081,125 @@ function executeReportSend() {
 }
 
 function executeServiceReset() {
-  db.ref('checks').set(null);
+  db.ref('today/checks').set(null);
   selectedStaff = null;
   showAlert('✓ Service reset - Ready for next session');
+}
+
+function calculateWeeklyScores(allDays) {
+  const staffWeekly = {};
+
+  Object.entries(allDays).forEach(([date, dayData]) => {
+    const checks = dayData.checks ? Object.values(dayData.checks) : [];
+    const hours = dayData.hours || {};
+
+    // Per-day ratio for avg-per-shift calculation
+    Object.entries(hours).forEach(([name, record]) => {
+      if (!staffWeekly[name]) {
+        staffWeekly[name] = { avatar: record.avatar || '👤', totalMinutes: 0, dayRatios: [], checks: [] };
+      }
+      const dayMinutes = record.totalMinutes || 0;
+      const dayHours = dayMinutes / 60;
+      staffWeekly[name].totalMinutes += dayMinutes;
+
+      if (dayHours >= 0.25) {
+        const dayChecks = checks.filter(c => c.completed && c.staffCheck === name).length;
+        staffWeekly[name].dayRatios.push(dayHours > 0 ? dayChecks / dayHours : 0);
+      }
+    });
+
+    checks.filter(c => c.completed && c.staffCheck).forEach(c => {
+      if (!staffWeekly[c.staffCheck]) {
+        staffWeekly[c.staffCheck] = { avatar: '👤', totalMinutes: 0, dayRatios: [], checks: [] };
+      }
+      staffWeekly[c.staffCheck].checks.push(c);
+    });
+  });
+
+  const staffStats = Object.entries(staffWeekly).map(([name, data]) => {
+    const totalHours = data.totalMinutes / 60;
+    const totalChecks = data.checks.length;
+
+    // Criterion 1: avg tables/hour across shifts (50%)
+    const avgTPH = data.dayRatios.length > 0
+      ? data.dayRatios.reduce((a, b) => a + b, 0) / data.dayRatios.length
+      : 0;
+
+    // Criterion 2: % checks in green window 3-8 min (30%)
+    const greenChecks = data.checks.filter(c => {
+      const d = (new Date(c.completedTime) - new Date(c.foodTime)) / 60000;
+      return d >= 3 && d <= 8;
+    }).length;
+    const greenPct = totalChecks > 0 ? Math.round((greenChecks / totalChecks) * 100) : 0;
+
+    // Criterion 3: avg check time, closest to 5 min = best (20%)
+    let avgCheckTime = 0;
+    if (totalChecks > 0) {
+      avgCheckTime = data.checks.reduce((sum, c) => {
+        return sum + (new Date(c.completedTime) - new Date(c.foodTime)) / 60000;
+      }, 0) / totalChecks;
+    }
+    const avgCheckScore = Math.max(0, 100 - Math.abs(avgCheckTime - 5) * 20);
+
+    return {
+      name, avatar: data.avatar, totalHours, totalChecks,
+      avgTPH: Math.round(avgTPH * 10) / 10,
+      greenPct,
+      avgCheckTime: Math.round(avgCheckTime * 10) / 10,
+      avgCheckScore: Math.round(avgCheckScore),
+      eligible: totalHours >= 2,
+      _rawTPH: avgTPH
+    };
+  }).filter(s => s.eligible);
+
+  // Normalize TPH so a top performer = 100 regardless of volume
+  const maxTPH = Math.max(...staffStats.map(s => s._rawTPH), 1);
+  staffStats.forEach(s => {
+    const tphNorm = (s._rawTPH / maxTPH) * 100;
+    s.score = (tphNorm * 0.5) + (s.greenPct * 0.3) + (s.avgCheckScore * 0.2);
+    s.score = Math.round(s.score);
+  });
+
+  return staffStats.sort((a, b) => b.score - a.score);
+}
+
+function executeWeeklyReport() {
+  const todayKey = getTodayKey();
+  
+  db.ref('archive').once('value', archiveSnap => {
+    db.ref('today').once('value', todaySnap => {
+      const archive = archiveSnap.val() || {};
+      const todayData = todaySnap.val() || {};
+      
+      const allDays = Object.assign({}, archive);
+      allDays[todayKey] = { checks: todayData.checks || null, hours: todayData.hours || null };
+      
+      const staffStats = calculateWeeklyScores(allDays);
+      const now = new Date();
+      
+      const reportData = {
+        type: 'weekly',
+        weekEnding: now.toLocaleDateString('fr-FR'),
+        staffStats: staffStats,
+        top3: staffStats.slice(0, 3)
+      };
+      
+      fetch(WEBHOOK_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(reportData)
+      })
+      .then(() => {
+        db.ref('archive').set(null);
+        db.ref('today').set({ date: todayKey, checks: null, workingStaff: todayData.workingStaff || null, hours: null });
+        showAlert('✓ Weekly report sent! Data cleared for new week.');
+      })
+      .catch(() => {
+        showAlert('⚠ Could not send - check internet connection');
+      });
+    });
+  });
 }
 
 function renderUI() {
