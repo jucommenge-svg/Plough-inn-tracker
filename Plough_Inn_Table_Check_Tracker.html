@@ -11,12 +11,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
 .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #ddd; padding-bottom: 12px; }
 .header h1 { font-size: 20px; font-weight: 600; }
 
-.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
 .stat-card { background: #f5f5f5; padding: 12px; border-radius: 8px; text-align: center; }
 .stat-value { font-size: 24px; font-weight: 600; color: #2E75B6; }
 .stat-label { font-size: 12px; color: #666; margin-top: 4px; }
 .stat-card.red .stat-value { color: #E74C3C; }
 .stat-card.green .stat-value { color: #27AE60; }
+.stat-card.lost .stat-value { color: #6C3483; }
 
 .section-title { font-size: 14px; font-weight: 600; margin: 20px 0 12px; color: #333; }
 .staff-reminder { font-size: 11px; color: #E74C3C; font-weight: 600; margin: 0 0 8px 0; }
@@ -106,6 +107,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
 .pending-item { padding: 6px 0; font-size: 12px; color: #666; }
 .pending-item.late { color: #E74C3C; font-weight: 600; }
 
+.lost-list { background: #F4ECF7; padding: 12px; border-radius: 6px; margin-bottom: 20px; max-height: 150px; overflow-y: auto; border: 1px solid #D7BDE2; }
+.lost-item { padding: 6px 0; font-size: 12px; color: #6C3483; font-weight: 600; }
+
 .alert-box { background: #FFF3CD; border: 1px solid #FFC107; color: #856404; padding: 12px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; text-align: center; font-weight: 600; }
 
 .thank-you-box { background: #D4EDDA; border: 1px solid #27AE60; color: #155724; padding: 16px; border-radius: 8px; margin-bottom: 16px; text-align: center; font-weight: 600; font-size: 14px; }
@@ -120,7 +124,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
     <h1>Table Check Tracker</h1>
     <div style="text-align: right;">
       <div id="datetime" style="font-size: 12px; color: #666;"></div>
-      <div style="font-size: 10px; color: #27AE60; font-weight: 600;">v9</div>
+      <div style="font-size: 10px; color: #27AE60; font-weight: 600;">v11</div>
     </div>
   </div>
 
@@ -136,6 +140,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
     <div class="stat-card">
       <div class="stat-value" id="pending">0</div>
       <div class="stat-label">Pending</div>
+    </div>
+    <div class="stat-card lost">
+      <div class="stat-value" id="lost">0</div>
+      <div class="stat-label">Lost (>10min)</div>
     </div>
   </div>
 
@@ -162,6 +170,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
 
   <div class="section-title">Pending Checks (Red = Late)</div>
   <div class="pending-list" id="pending-list"><div style="color: #999; font-size: 12px;">No pending checks</div></div>
+
+  <div class="section-title">Lost Tables — not checked within 10 min</div>
+  <div class="lost-list" id="lost-list"><div style="color: #999; font-size: 12px;">No lost tables</div></div>
 
   <div class="action-buttons">
     <button class="btn" id="send-report-btn">Send Daily Report</button>
@@ -239,6 +250,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-s
   </div>
 </div>
 
+<div class="modal" id="reminder-modal">
+  <div class="modal-content">
+    <h2 id="reminder-title">Still working?</h2>
+    <p style="font-size: 13px; color: #666; margin-bottom: 16px;">No table checked in the last 2 hours.</p>
+    <div class="modal-buttons">
+      <button id="reminder-yes" style="background: #27AE60; color: #fff; border-color: #27AE60; font-weight: 600;">Yes, still working</button>
+      <button id="reminder-no" style="background: #E74C3C; color: #fff; border-color: #E74C3C; font-weight: 600;">No, clock me off</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 <script>
@@ -261,6 +283,8 @@ const CHECKS_KEY = 'plough_checks';
 const START_TIME_KEY = 'plough_start_time';
 const HOURS_KEY = 'plough_staff_hours';
 const MANAGER_CODE = '1234';
+const LOST_THRESHOLD = 10; // minutes: an unchecked table older than this is marked "lost"
+const INACTIVITY_THRESHOLD = 120; // minutes: prompt "still working?" after this much inactivity
 const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbx_BhXV_ZYYGfsTikZMgpKqlrydi34V8H2xYABbc3e5tRDHWmhPtOOCHw9HJo7JoOpX/exec';
 
 const defaultStaff = [
@@ -291,6 +315,8 @@ let selectedStaff = null;
 let currentSection = '1-80';
 let pendingAvatar = null;
 let selectedAvatarForPending = null;
+let reminderActive = false;
+let reminderStaffName = null;
 
 function getTodayKey() {
   const d = new Date();
@@ -736,8 +762,11 @@ function renderTables() {
     
     const tableChecks = checks.filter(c => c.table === tableNum);
     const lastCheck = tableChecks.length > 0 ? tableChecks[tableChecks.length - 1] : null;
-    
-    if (lastCheck && !lastCheck.completed) {
+
+    // An "open" check is one that is neither completed nor lost.
+    const isOpen = lastCheck && !lastCheck.completed && !lastCheck.lost;
+
+    if (isOpen) {
       const delta = (Date.now() - new Date(lastCheck.foodTime)) / 1000 / 60;
       if (delta >= 8) {
         btn.classList.add('late');
@@ -747,17 +776,16 @@ function renderTables() {
         btn.classList.add('pending');
       }
     }
-    
+
     btn.onclick = () => {
-      if (lastCheck && lastCheck.completed) {
-        startNewCheck(tableNum);
-      } else if (lastCheck && !lastCheck.completed) {
+      if (isOpen) {
         if (!selectedStaff) {
           showAlert('⚠ Select your name first!');
         } else {
           completeCheck(tableNum);
         }
       } else {
+        // No check, or last check is completed/lost → table is available again
         startNewCheck(tableNum);
       }
     };
@@ -777,7 +805,7 @@ function completeCheck(tableNum) {
   }
   
   const checks = getChecks();
-  const tableChecks = checks.filter(c => c.table === tableNum && !c.completed);
+  const tableChecks = checks.filter(c => c.table === tableNum && !c.completed && !c.lost);
   if (tableChecks.length > 0) {
     const target = tableChecks[tableChecks.length - 1];
     db.ref('today/checks/' + target._key).update({
@@ -791,15 +819,98 @@ function completeCheck(tableNum) {
   renderStaff();
 }
 
+function checkForLostTables() {
+  if (!db) return;
+  const checks = getChecks();
+  const now = Date.now();
+  checks.forEach(check => {
+    if (check.completed || check.lost) return;
+    const delta = (now - new Date(check.foodTime)) / 1000 / 60;
+    if (delta >= LOST_THRESHOLD) {
+      db.ref('today/checks/' + check._key).update({
+        lost: true,
+        lostTime: new Date().toISOString()
+      });
+    }
+  });
+}
+
+// Returns the most recent moment a staff member was "active":
+// their last completed check, else their reminder acknowledgement, else clock-in.
+function getLastActivity(name) {
+  const hours = getStaffHours();
+  const record = hours[name] || {};
+  let last = 0;
+  if (record.clockIn) last = Math.max(last, new Date(record.clockIn).getTime());
+  if (record.lastReminderAck) last = Math.max(last, new Date(record.lastReminderAck).getTime());
+  const checks = getChecks();
+  checks.forEach(c => {
+    if (c.completed && c.staffCheck === name && c.completedTime) {
+      last = Math.max(last, new Date(c.completedTime).getTime());
+    }
+  });
+  return last;
+}
+
+function checkInactiveStaff() {
+  if (!db || reminderActive) return;
+  const working = getWorkingStaff();
+  const now = Date.now();
+  for (const staff of working) {
+    if (!staff || !staff.name) continue;
+    const last = getLastActivity(staff.name);
+    if (last === 0) continue; // no clock-in record yet
+    const idleMin = (now - last) / 1000 / 60;
+    if (idleMin >= INACTIVITY_THRESHOLD) {
+      showReminderModal(staff.name);
+      break; // one prompt at a time
+    }
+  }
+}
+
+function showReminderModal(name) {
+  reminderActive = true;
+  reminderStaffName = name;
+  document.getElementById('reminder-title').textContent = `${getDisplayName(name)}, still working?`;
+  document.getElementById('reminder-modal').classList.add('show');
+}
+
+function reminderSaidYes() {
+  if (!reminderStaffName) { closeReminder(); return; }
+  const hours = getStaffHours();
+  if (hours[reminderStaffName]) {
+    hours[reminderStaffName].lastReminderAck = new Date().toISOString();
+    db.ref('today/hours').set(hours);
+  }
+  showAlert(`✓ ${getDisplayName(reminderStaffName)} confirmed working`);
+  closeReminder();
+}
+
+function reminderSaidNo() {
+  if (!reminderStaffName) { closeReminder(); return; }
+  const name = reminderStaffName;
+  closeReminder();
+  removeStaffFromDay(name); // accumulates the session minutes and sets clockOut
+  showAlert(`✓ ${getDisplayName(name)} auto clocked off (inactive 2h)`);
+}
+
+function closeReminder() {
+  document.getElementById('reminder-modal').classList.remove('show');
+  reminderActive = false;
+  reminderStaffName = null;
+}
+
 function updateStats() {
   const checks = getChecks();
-  let onTime = 0, late = 0, pending = 0;
+  let onTime = 0, late = 0, pending = 0, lost = 0;
   
   checks.forEach(check => {
     if (check.completed) {
       const delta = (new Date(check.completedTime) - new Date(check.foodTime)) / 1000 / 60;
       if (delta <= 8) onTime++;
       else late++;
+    } else if (check.lost) {
+      lost++;
     } else {
       pending++;
     }
@@ -808,8 +919,10 @@ function updateStats() {
   document.getElementById('on-time').textContent = onTime;
   document.getElementById('late').textContent = late;
   document.getElementById('pending').textContent = pending;
+  document.getElementById('lost').textContent = lost;
   
   updatePendingList();
+  updateLostList();
 }
 
 function updatePendingList() {
@@ -817,7 +930,7 @@ function updatePendingList() {
   const pending = [];
   
   checks.forEach(check => {
-    if (!check.completed) {
+    if (!check.completed && !check.lost) {
       const delta = (Date.now() - new Date(check.foodTime)) / 1000 / 60;
       pending.push({ table: check.table, delta, late: delta >= 8 });
     }
@@ -835,6 +948,28 @@ function updatePendingList() {
     const time = mins + 'm ' + secs + 's';
     const status = p.delta < 3 ? '(too early)' : p.late ? '(LATE)' : '(check now!)';
     return `<div class="pending-item ${p.late ? 'late' : ''}"">Table ${p.table} - ${time} ${status}</div>`;
+  }).join('');
+}
+
+function updateLostList() {
+  const checks = getChecks();
+  const lost = checks.filter(c => c.lost);
+  
+  const lostList = document.getElementById('lost-list');
+  if (lost.length === 0) {
+    lostList.innerHTML = '<div style="color: #999; font-size: 12px;">No lost tables</div>';
+    return;
+  }
+  
+  // Most recently lost first
+  lost.sort((a, b) => new Date(b.lostTime || 0) - new Date(a.lostTime || 0));
+  
+  lostList.innerHTML = lost.map(c => {
+    let timeStr = '';
+    if (c.lostTime) {
+      timeStr = new Date(c.lostTime).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
+    }
+    return `<div class="lost-item">Table ${c.table} — lost at ${timeStr}</div>`;
   }).join('');
 }
 
@@ -952,6 +1087,9 @@ document.getElementById('clock-off-cancel').onclick = () => {
   document.getElementById('clock-off-modal').classList.remove('show');
 };
 
+document.getElementById('reminder-yes').onclick = reminderSaidYes;
+document.getElementById('reminder-no').onclick = reminderSaidNo;
+
 document.getElementById('send-report-btn').onclick = () => {
   document.getElementById('confirm-action-title').textContent = 'Send Daily Report';
   document.getElementById('confirm-action-btn').textContent = 'Send Daily Report';
@@ -1017,7 +1155,8 @@ function executeReportSend() {
   const checks = getChecks();
   const hours = getStaffHours();
   const completed = checks.filter(c => c.completed).length;
-  const pending = checks.filter(c => !c.completed).length;
+  const lostChecks = checks.filter(c => c.lost);
+  const pending = checks.filter(c => !c.completed && !c.lost).length;
   const now = new Date();
   
   // Build a report for every staff who worked today (from hours record)
@@ -1060,7 +1199,9 @@ function executeReportSend() {
     time: now.toLocaleTimeString('fr-FR'),
     staffReport: staffReport,
     totalCompleted: completed,
-    totalPending: pending
+    totalPending: pending,
+    totalLost: lostChecks.length,
+    lostTables: lostChecks.map(c => ({ table: c.table, lostTime: c.lostTime || null }))
   };
   
   fetch(WEBHOOK_URL, {
@@ -1231,6 +1372,9 @@ function bootApp() {
   setInterval(renderTables, 500);
   setInterval(updateLeaderboard, 500);
   setInterval(updatePendingList, 1000);
+  setInterval(checkForLostTables, 2000);
+  setInterval(updateLostList, 1000);
+  setInterval(checkInactiveStaff, 60000);
   connectFirebase();
 }
 
